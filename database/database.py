@@ -51,7 +51,7 @@ def create_table(): #hàm tạo bảng
 
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS class(
-        class_code TEXT PRIMARY KEY,
+        class_id INTEGER PRIMARY KEY,
         subject_code TEXT,
         room_code TEXT,
         day INTEGER,
@@ -66,11 +66,11 @@ def create_table(): #hàm tạo bảng
 
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS schedule(
-        class_code TEXT PRIMARY KEY,
+        class_id INTEGER PRIMARY KEY,
         lecturer_id INTEGER,
         status TEXT DEFAULT "AUTO",
         is_locked INTEGER DEFAULT 0,
-        FOREIGN KEY(class_code) REFERENCES class(class_code),
+        FOREIGN KEY(class_id) REFERENCES class(class_id),
         FOREIGN KEY(lecturer_id) REFERENCES lecturer(lecturer_id)
     )
     """)
@@ -100,9 +100,9 @@ def get_lecturer_by_subject(subject_code): #hàm lấy thông tin giảng viên 
 def get_lecturer_schedule(lecturer_id): #hàm lấy lịch của 1 giảng viên
     conn = get_connection()
     query = """
-        SELECT s.class_code, c.day, c.start_period, c.end_period, c.weeks
+        SELECT s.class_id, c.day, c.start_period, c.end_period, c.weeks
         FROM schedule s
-        JOIN class c ON s.class_code = c.class_code
+        JOIN class c ON s.class_id = c.class_id
         WHERE s.lecturer_id = ?
     """
     cursor = conn.execute(query, (lecturer_id,))
@@ -124,7 +124,7 @@ def get_lecturer_current_load(lecturer_id): #hàm lấy tổng số tín chỉ c
     query = """
         SELECT SUM(sub.credits) as total_credits
         FROM schedule s
-        JOIN class c ON s.class_code = c.class_code
+        JOIN class c ON s.class_id = c.class_id
         JOIN subject sub ON c.subject_code = sub.subject_code
         WHERE s.lecturer_id = ?
     """
@@ -137,7 +137,7 @@ def get_full_schedule_view(): #hàm in ra lịch đầy đủ
     conn = get_connection()
     query = """
         SELECT 
-            c.class_code, 
+            c.class_id, 
             sub.subject_name, 
             c.room_code, 
             c.day, 
@@ -146,7 +146,7 @@ def get_full_schedule_view(): #hàm in ra lịch đầy đủ
             l.lecturer_name,
             s.status
         FROM schedule s
-        JOIN class c ON s.class_code = c.class_code
+        JOIN class c ON s.class_id = c.class_id
         JOIN subject sub ON c.subject_code = sub.subject_code
         LEFT JOIN lecturer l ON s.lecturer_id = l.lecturer_id
     """
@@ -155,14 +155,14 @@ def get_full_schedule_view(): #hàm in ra lịch đầy đủ
     conn.close()
     return [dict(row) for row in rows]
 
-def assign_lecturer(class_code, lecturer_id): #hàm lưu kết quả
+def assign_lecturer(class_id, lecturer_id): #hàm lưu kết quả
     conn = get_connection()
     try:
         query = """
-            INSERT OR REPLACE INTO schedule (class_code, lecturer_id, status)
+            INSERT OR REPLACE INTO schedule (class_id, lecturer_id, status)
             VALUES (?, ?, 'AUTO')
         """
-        conn.execute(query, (class_code, lecturer_id))
+        conn.execute(query, (class_id, lecturer_id))
         conn.commit()
         return True
     except Exception:
