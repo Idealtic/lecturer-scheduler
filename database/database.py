@@ -9,8 +9,7 @@ def get_connection(): #hàm khởi tạo
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
-def create_table(): #hàm tạo bảng
-    conn = get_connection()
+def create_table(conn): #hàm tạo bảng
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -74,17 +73,13 @@ def create_table(): #hàm tạo bảng
     """)
 
     conn.commit()
-    conn.close()
 
-def get_all_class(): #hàm lấy tất cả các lớp
-    conn = get_connection()
+def get_all_class(conn): #hàm lấy tất cả các lớp
     cursor = conn.execute("SELECT * FROM class")
     rows = cursor.fetchall()
-    conn.close()
     return [dict(row) for row in rows]
 
-def get_lecturer_by_subject(subject_code): #hàm lấy thông tin giảng viên theo môn
-    conn = get_connection()
+def get_lecturer_by_subject(conn, subject_code): #hàm lấy thông tin giảng viên theo môn
     query = """
         SELECT l.* FROM lecturer l
         JOIN lecturer_skill s ON l.lecturer_id = s.lecturer_id
@@ -92,11 +87,9 @@ def get_lecturer_by_subject(subject_code): #hàm lấy thông tin giảng viên 
     """
     cursor = conn.execute(query, (subject_code,))
     rows = cursor.fetchall()
-    conn.close()
     return [dict(row) for row in rows]
 
-def get_lecturer_schedule(lecturer_id): #hàm lấy lịch của 1 giảng viên
-    conn = get_connection()
+def get_lecturer_schedule(conn, lecturer_id): #hàm lấy lịch của 1 giảng viên
     query = """
         SELECT s.class_id, c.day, c.start_period, c.end_period, c.weeks
         FROM schedule s
@@ -105,20 +98,16 @@ def get_lecturer_schedule(lecturer_id): #hàm lấy lịch của 1 giảng viên
     """
     cursor = conn.execute(query, (lecturer_id,))
     rows = cursor.fetchall()
-    conn.close()
     return [dict(row) for row in rows]
 
-def get_room_info(room_code): #hàm lấy thông tin của phòng
-    conn = get_connection()
+def get_room_info(conn, room_code): #hàm lấy thông tin của phòng
     cursor = conn.execute("SELECT * FROM room WHERE room_code = ?", (room_code,))
     row = cursor.fetchone()
-    conn.close()
     if row:
         return dict(row)
     return None
 
-def get_lecturer_current_load(lecturer_id): #hàm lấy tổng số tín chỉ của giảng viên
-    conn = get_connection()
+def get_lecturer_current_load(conn, lecturer_id): #hàm lấy tổng số tín chỉ của giảng viên
     query = """
         SELECT SUM(sub.credits) as total_credits
         FROM schedule s
@@ -128,11 +117,9 @@ def get_lecturer_current_load(lecturer_id): #hàm lấy tổng số tín chỉ c
     """
     cursor = conn.execute(query, (lecturer_id,))
     row = cursor.fetchone()
-    conn.close()
     return row['total_credits'] if row['total_credits'] else 0
 
-def get_full_schedule_view(): #hàm in ra lịch đầy đủ
-    conn = get_connection()
+def get_full_schedule_view(conn): #hàm in ra lịch đầy đủ
     query = """
         SELECT 
             c.class_id, 
@@ -150,11 +137,9 @@ def get_full_schedule_view(): #hàm in ra lịch đầy đủ
     """
     cursor = conn.execute(query)
     rows = cursor.fetchall()
-    conn.close()
     return [dict(row) for row in rows]
 
-def assign_lecturer(class_id, lecturer_id): #hàm lưu kết quả
-    conn = get_connection()
+def assign_lecturer(conn, class_id, lecturer_id): #hàm lưu kết quả
     try:
         query = """
             INSERT OR REPLACE INTO schedule (class_id, lecturer_id, status)
@@ -165,15 +150,15 @@ def assign_lecturer(class_id, lecturer_id): #hàm lưu kết quả
         return True
     except Exception:
         return False
-    finally:
-        conn.close()
 
-def clear_schedule(): #hàm reset kết quả phân công khi muốn chạy lần sau
-    conn = get_connection()
+def clear_schedule(conn): #hàm reset kết quả phân công khi muốn chạy lần sau
     conn.execute("DELETE FROM schedule WHERE is_locked = 0")
     conn.commit()
-    conn.close()
 
 if __name__ == "__main__":
-    create_table()
-    print("Database initialized.")
+    conn = get_connection()
+    try:
+        create_table(conn)
+        print("Đã tạo database.")
+    finally:
+        conn.close()
