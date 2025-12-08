@@ -187,26 +187,12 @@ def insert_classes(subjects, conn, rooms): #thêm dữ liệu vào bảng class
                 current_class_id +=1
 
             elif credits == 3:
-                mode = random.choice(["1 buổi", "2 buổi"])
-                if mode == "1 buổi":
-                    day = random.randint(2, 7)
-                    start_period = random.choice([1, 6])
-                    end_period = start_period + 3
+                day = random.randint(2, 7)
+                start_period = random.choice([1, 6])
+                end_period = start_period + 3
 
-                    classes.append((current_class_id, sub_code, room, day, start_period, end_period, weeks, student_count))
-                    current_class_id += 1
-
-                else:
-                    day_1 = random.randint(2, 5)
-                    day_2 = day_1 + 2
-
-                    start_period = random.choice([1, 3, 5, 7, 9, 11])
-                    end_period = start_period + 1
-
-                    classes.append((current_class_id, sub_code, room, day_1, start_period, end_period, weeks, student_count))
-                    current_class_id += 1
-                    classes.append((current_class_id, sub_code, room, day_2, start_period, end_period, weeks, student_count))
-                    current_class_id += 1
+                classes.append((current_class_id, sub_code, room, day, start_period, end_period, weeks, student_count))
+                current_class_id += 1
 
             elif credits == 4:
                 day_1 = random.randint(2, 5)
@@ -228,10 +214,9 @@ def insert_classes(subjects, conn, rooms): #thêm dữ liệu vào bảng class
         print(f"Đã thêm {len(classes)} lớp học.")
     return classes
 
-def create_sample_data(): #xoá dữ liệu cũ và thêm tất cả dữ liệu mới vào các bảng
-    create_table()
-    conn = get_connection()
+def create_sample_data(conn): #xoá dữ liệu cũ và thêm tất cả dữ liệu mới vào các bảng
     try:
+        create_table(conn)
         conn.execute("PRAGMA foreign_keys = OFF")
         tables = ["schedule", "class", "lecturer_skill", "lecturer", "room", "subject"]
         for t in tables:
@@ -249,8 +234,10 @@ def create_sample_data(): #xoá dữ liệu cũ và thêm tất cả dữ liệu
     except Exception as error:
         print(f"Lỗi: {error}")
         return -1
-    finally:
-        conn.close()
 
 if __name__ == "__main__":
-    create_sample_data()
+    conn = get_connection()
+    try:
+        create_sample_data(conn)
+    finally:
+        conn.close()
