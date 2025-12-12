@@ -12,7 +12,7 @@ def check_time_conflict(lecturer_id, day, start_period, end_period, conn):
     query = """
         SELECT 1
         FROM schedule s 
-        JOIN class c ON s.class_id = c.class_id
+        JOIN classes c ON s.class_id = c.class_id
         WHERE s.lecturer_id = ?
         AND c.day = ?
         AND (c.start_period < ? and ? < c.end_period)

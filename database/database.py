@@ -47,7 +47,7 @@ def create_table(conn): #hàm tạo bảng
     """)
 
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS class(
+    CREATE TABLE IF NOT EXISTS classes(
         class_id INTEGER PRIMARY KEY,
         subject_code TEXT,
         room_code TEXT,
@@ -67,15 +67,15 @@ def create_table(conn): #hàm tạo bảng
         lecturer_id INTEGER,
         status TEXT DEFAULT "AUTO",
         is_locked INTEGER DEFAULT 0,
-        FOREIGN KEY(class_id) REFERENCES class(class_id),
+        FOREIGN KEY(class_id) REFERENCES classes(class_id),
         FOREIGN KEY(lecturer_id) REFERENCES lecturer(lecturer_id)
     )
     """)
 
     conn.commit()
 
-def get_all_class(conn): #hàm lấy tất cả các lớp
-    cursor = conn.execute("SELECT * FROM class")
+def get_all_classes(conn): #hàm lấy tất cả các lớp
+    cursor = conn.execute("SELECT * FROM classes")
     rows = cursor.fetchall()
     return [dict(row) for row in rows]
 
@@ -93,7 +93,7 @@ def get_lecturer_schedule(conn, lecturer_id): #hàm lấy lịch của 1 giảng
     query = """
         SELECT s.class_id, c.day, c.start_period, c.end_period, c.weeks
         FROM schedule s
-        JOIN class c ON s.class_id = c.class_id
+        JOIN classes c ON s.class_id = c.class_id
         WHERE s.lecturer_id = ?
     """
     cursor = conn.execute(query, (lecturer_id,))
@@ -111,7 +111,7 @@ def get_lecturer_current_load(conn, lecturer_id): #hàm lấy tổng số tín c
     query = """
         SELECT SUM(sub.credits) as total_credits
         FROM schedule s
-        JOIN class c ON s.class_id = c.class_id
+        JOIN classes c ON s.class_id = c.class_id
         JOIN subject sub ON c.subject_code = sub.subject_code
         WHERE s.lecturer_id = ?
     """
@@ -131,7 +131,7 @@ def get_full_schedule_view(conn): #hàm in ra lịch đầy đủ
             l.lecturer_name,
             s.status
         FROM schedule s
-        JOIN class c ON s.class_id = c.class_id
+        JOIN classes c ON s.class_id = c.class_id
         JOIN subject sub ON c.subject_code = sub.subject_code
         LEFT JOIN lecturer l ON s.lecturer_id = l.lecturer_id
     """

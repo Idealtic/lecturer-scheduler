@@ -147,7 +147,7 @@ def insert_lecturer_skills(conn): #thêm dữ liệu vào bảng lecturer_skill
         print(f"Đã phân công giảng viên.")
     return skills
 
-def insert_classes(subjects, conn, rooms): #thêm dữ liệu vào bảng class
+def insert_classes(subjects, conn, rooms): #thêm dữ liệu vào bảng classes
     ssh_subs = [s for s in subjects if s[0].startswith("SSH")]
     mi_subs  = [s for s in subjects if s[0].startswith("MI")]
     em_subs  = [s for s in subjects if s[0].startswith("EM")]
@@ -210,7 +210,7 @@ def insert_classes(subjects, conn, rooms): #thêm dữ liệu vào bảng class
                 current_class_id += 1
 
     if classes:
-        conn.executemany("INSERT OR IGNORE INTO class VALUES (?,?,?,?,?,?,?,?)", classes)
+        conn.executemany("INSERT OR IGNORE INTO classes VALUES (?,?,?,?,?,?,?,?)", classes)
         print(f"Đã thêm {len(classes)} lớp học.")
     return classes
 
@@ -218,7 +218,7 @@ def create_sample_data(conn): #xoá dữ liệu cũ và thêm tất cả dữ li
     try:
         create_table(conn)
         conn.execute("PRAGMA foreign_keys = OFF")
-        tables = ["schedule", "class", "lecturer_skill", "lecturer", "room", "subject"]
+        tables = ["schedule", "classes", "lecturer_skill", "lecturer", "room", "subject"]
         for t in tables:
             conn.execute(f"DELETE FROM {t}")
         conn.execute("PRAGMA foreign_keys = ON")
