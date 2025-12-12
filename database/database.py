@@ -79,6 +79,13 @@ def get_all_classes(conn): #hàm lấy tất cả các lớp
     rows = cursor.fetchall()
     return [dict(row) for row in rows]
 
+def get_subject_credits(conn, subject_code): #hàm lấy số tín chỉ của 1 môn học
+    cur = conn.execute("SELECT credits FROM subject WHERE subject_code = ?", (subject_code,))
+    row = cur.fetchone()
+    if row:
+        return row['credits']
+    return 0
+
 def get_lecturer_by_subject(conn, subject_code): #hàm lấy thông tin giảng viên theo môn
     query = """
         SELECT l.* FROM lecturer l

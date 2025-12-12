@@ -1,8 +1,14 @@
-
+import networkx as nx
+from collections import defaultdict
 from validation import (
     check_lecturer_skill,
     check_time_conflict,
     check_lecturer_max_credits
+)
+from database import (
+    get_connection, get_all_classes, get_subject_credits, 
+    get_lecturer_by_subject, get_lecturer_schedule, get_lecturer_current_load,
+    assign_lecturer, clear_schedule
 )
 
 def can_assign(class_info, lecturer, conn):
@@ -31,16 +37,6 @@ def can_assign(class_info, lecturer, conn):
 
     return True
 
-
-import networkx as nx
-from database import (
-    get_connection, get_all_class, get_lecturer_by_subject,
-    get_lecturer_schedule, get_lecturer_current_load,
-    assign_lecturer, clear_schedule, get_connection
-)
-from collections import defaultdict
-
-# ---------- Helper functions: weeks parsing and time conflict ----------
 def parse_weeks(weeks_str):
     """
     Nhận chuỗi weeks như "2-19" hoặc "1,3,5" hoặc "2-5,7,9-11"
@@ -53,9 +49,10 @@ def parse_weeks(weeks_str):
         if not p:
             continue
         if "-" in p:
-            a,b = p.split("-")
+            a, b = p.split("-")
             try:
-                a = int(a); b = int(b)
+                a = int(a) 
+                b = int(b)
                 s.update(range(a, b+1))
             except:
                 pass
@@ -66,35 +63,24 @@ def parse_weeks(weeks_str):
                 pass
     return s
 
-def time_conflict(cls1, cls2):
+def time_conflict(class_1, class_2):
     """
     Kiểm tra hai lớp có xung đột lịch không:
     - cùng day
     - tiết trùng hoặc chồng (start/end overlap)
     - tuần có giao nhau
-    cls: dict with keys day,start_period,end_period,weeks (string)
+    class: dict with keys day,start_period,end_period,weeks (string)
     """
-    if cls1["day"] != cls2["day"]:
+    if class_1["day"] != class_2["day"]:
         return False
-    # period overlap
-    if cls1["end_period"] < cls2["start_period"] or cls2["end_period"] < cls1["start_period"]:
+    if class_1["end_period"] < class_2["start_period"] or class_2["end_period"] < class_1["start_period"]:
         return False
-    weeks1 = parse_weeks(cls1.get("weeks", ""))
-    weeks2 = parse_weeks(cls2.get("weeks", ""))
-    if not weeks1 or not weeks2:
-        # nếu không rõ weeks, ta coi là có xung đột bảo thủ
+    week_1 = parse_weeks(class_1.get("weeks", ""))
+    week_2 = parse_weeks(class_2.get("weeks", ""))
+    if not week_1 or not week_2:
         return True
-    return len(weeks1 & weeks2) > 0
+    return len(week_1 & week_2) > 0
 
-# ---------- Query helper to get subject credits ----------
-def get_subject_credits(conn, subject_code):
-    cur = conn.execute("SELECT credits FROM subject WHERE subject_code = ?", (subject_code,))
-    row = cur.fetchone()
-    if row:
-        return row['credits']
-    return 0
-
-# ---------- Score function ----------
 def compute_score_for_assignment(conn, cls, lecturer):
     """
     Tính điểm phù hợp (score) cho việc gán lecturer cho class cls.
@@ -110,11 +96,11 @@ def compute_score_for_assignment(conn, cls, lecturer):
     # kiểm tra nếu lecturer được trả (đã được filtered), else return None
     base = 100
     # lấy current load và max credits
-    cur_load = get_lecturer_current_load(conn, lecturer['lecturer_id'])
-    max_credits = lecturer['max_credits']
+    cur_load = get_lecturer_current_load(conn, lecturer["lecturer_id"])
+    max_credits = lecturer["max_credits"]
     # penalty
     if max_credits <= 0:
-        return -100000
+        return -1
     load_ratio = cur_load / max_credits
     score = base - int(load_ratio * 50)
     return score
@@ -129,7 +115,7 @@ def build_flow_graph(conn):
 
     Note: remaining_slots được tính bằng floor((max_credits - current_load) / min_class_credit)
     """
-    classes = get_all_class(conn)  # list of dicts for each class
+    classes = get_all_classes(conn)  # list of dicts for each class
     # tính tín chỉ nhỏ nhất của các lớp để xác định kích thước slot
     class_credits = {}
     min_credit = None
