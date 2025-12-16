@@ -69,7 +69,7 @@ def time_conflict(class_1, class_2):
     - cùng day
     - tiết trùng hoặc chồng (start/end overlap)
     - tuần có giao nhau
-    class: dict with keys day,start_period,end_period,weeks (string)
+    class: dict: day,start_period,end_period,weeks (string)
     """
     if class_1["day"] != class_2["day"]:
         return False
@@ -93,12 +93,11 @@ def compute_score_for_assignment(conn, cls, lecturer):
     subject_code = cls['subject_code']
     # lấy danh sách giảng viên theo subject (hàm get_lecturer_by_subject)
     # nhưng hàm ngoài trả list of dict giảng viên, chúng ta so sánh id
-    # kiểm tra nếu lecturer được trả (đã được filtered), else return None
+    # kiểm tra nếu lecturer được trả (đã được filtered), nếu không thì return None
     base = 100
     # lấy current load và max credits
     cur_load = get_lecturer_current_load(conn, lecturer["lecturer_id"])
     max_credits = lecturer["max_credits"]
-    # penalty
     if max_credits <= 0:
         return -1
     load_ratio = cur_load / max_credits
@@ -115,7 +114,7 @@ def build_flow_graph(conn):
 
     Note: remaining_slots được tính bằng floor((max_credits - current_load) / min_class_credit)
     """
-    classes = get_all_classes(conn)  # list of dicts for each class
+    classes = get_all_classes(conn) 
     # tính tín chỉ nhỏ nhất của các lớp để xác định kích thước slot
     class_credits = {}
     min_credit = None
@@ -134,7 +133,7 @@ def build_flow_graph(conn):
 
     # tính trước danh sách giảng viên có thể dạy mỗi lớp và cả lịch hiện tại để kiểm tra xung đột.
     # Map lec_id -> current schedule classes (list of dict)
-    # also map lecturer id -> dict (lecturer info: max_credits)
+    # map lecturer id -> dict (lecturer info: max_credits)
     # Chỉ lấy danh sách giảng viên cho từng môn dựa trên những giảng viên đủ điều kiện
     lecturers_info = {}  # id -> dict (lecturer row)
     # Lấy tất cả giảng viên cho capacity edges sau 
@@ -151,7 +150,7 @@ def build_flow_graph(conn):
             remaining = 0
         remaining_credits[lec_id] = remaining
 
-    # build class nodes and edges to SRC
+    # Tạo node cho mỗi lớp học và nối từ SOURCE
     for cls in classes:
         cls_node = f"class_{cls['class_id']}"
         G.add_edge(SRC, cls_node, capacity=1, weight=0)
@@ -173,7 +172,7 @@ def build_flow_graph(conn):
             existing = get_lecturer_schedule(conn, lec_id)
             conflict = False
             for ex in existing:
-                # ex has class_id, day, start_period, end_period, weeks
+                # ex chứa class_id, day, start_period, end_period, weeks
                 if time_conflict(cls, ex):
                     conflict = True
                     break
@@ -183,13 +182,12 @@ def build_flow_graph(conn):
 
             # tính điểm, ưu tiên giảng viên với current load thấp
             score = compute_score_for_assignment(conn, cls, lec)
-            # cost = negative score to maximize total score
             cost = -score
             lec_node = f"lec_{lec_id}"
             G.add_edge(cls_node, lec_node, capacity=1, weight=cost)
 
-    # thêm giảng viên -> SNK edges với capacity = số lượng lớp học có thể dạy
-    # compute min_class_credit to translate credits -> slots
+    # Thêm cạnh từ giảng viên đến SINK
+    # capacity biểu diễn số lượng lớp tối đa có thể nhận
     for lec_id, remaining in remaining_credits.items():
         slot_capacity = remaining // min_credit  # số lượng tín chỉ tối thiểu có thể nhận
         if slot_capacity <= 0:
@@ -201,8 +199,13 @@ def build_flow_graph(conn):
 
 def solve_and_record(conn, commit_result=True):
     """
-    Build graph, solve min-cost flow, return list of (class_id, lecturer_id) assignments.
-    If commit_result True -> write into schedule table (using assign_lecturer).
+    Giải bài toán phân công bằng Min-Cost Max-Flow.
+
+    Kết quả trả về:
+    - Danh sách (class_id, lecturer_id)
+
+    Nếu commit_result = True:
+    - Ghi kết quả phân công vào cơ sở dữ liệu
     """
     G, classes, class_credits = build_flow_graph(conn)
     SRC = "SRC"; SNK = "SNK"
@@ -210,9 +213,9 @@ def solve_and_record(conn, commit_result=True):
     # run min cost max flow
     flow_dict = nx.max_flow_min_cost(G, SRC, SNK)
 
-    # Extract assignments: if flow[class_node][lec_node] == 1 then assigned
+    # Trích xuất kết quả phân công:
+    # Nếu luồng từ node lớp sang node giảng viên bằng 1 thì lớp đó được gán cho giảng viên tương ứng
     assignments = []
-    # map class_id->class dict for quick lookup
     class_map = {cls['class_id']: cls for cls in classes}
 
     for node in list(G.nodes()):
@@ -221,7 +224,8 @@ def solve_and_record(conn, commit_result=True):
             for neigh, f in flow_dict[node].items():
                 if f and neigh.startswith("lec_"):
                     lec_id = int(neigh.split("_",1)[1])
-                    # ensure full unit assigned (f==1, because cap on class->lec was 1)
+                    # Đảm bảo lớp được gán đầy đủ:
+                    # f == 1 vì capacity của cạnh từ lớp sang giảng viên là 1
                     if f >= 1:
                         assignments.append((class_id, lec_id))
 
@@ -232,7 +236,7 @@ def solve_and_record(conn, commit_result=True):
         credits = class_credits.get(class_id, 1)
         lec_credit_sum[lec_id] += credits
 
-    # kiểm tra against remaining_credits (để chắc chắn)
+    # Đối chiếu kết quả phân công với ràng buộc tín chỉ còn lại của giảng viên
     over_assigned = []
     for lec_id, credit_sum in lec_credit_sum.items():
         cur_load = get_lecturer_current_load(conn, lec_id)
@@ -242,30 +246,30 @@ def solve_and_record(conn, commit_result=True):
 
     # Nếu giảng viên vượt quá capacity, bỏ qua các lớp được phân công có số tín chỉ thấp nhất của giảng viên đó
     if over_assigned:
-        # build score map for each assigned pair
+        # Tạo bảng score cho các cặp phân công
         score_map = {}
         for cls in classes:
             cls_id = cls['class_id']
             for lec in get_lecturer_by_subject(conn, cls['subject_code']):
                 score_map[(cls_id, lec['lecturer_id'])] = compute_score_for_assignment(conn, cls, lec)
 
-        # create mapping lec->list of (class_id, score)
+        # Tạo mapping lec->list of (class_id, score)
         lec_assign_map = defaultdict(list)
         for class_id, lec_id in assignments:
             s = score_map.get((class_id, lec_id), 0)
             lec_assign_map[lec_id].append((class_id, s))
 
-        removed = []  # list of class ids to reassign
+        removed = []  # Danh sách lớp cần xếp lại
         for lec_id in over_assigned:
-            # sort asc by score and drop until within capacity
+            # Sắp xếp theo score tăng dần và dừng lại cho đến khi đủ sức chứa
             lst = sorted(lec_assign_map[lec_id], key=lambda x: x[1])  # lowest score first
-            # compute how many credits need to be freed
+            # Xác định số tín chỉ cần loại bỏ để không vượt mức giới hạn
             cur_load = get_lecturer_current_load(conn, lec_id)
             max_credits = conn.execute("SELECT max_credits FROM lecturer WHERE lecturer_id = ?", (lec_id,)).fetchone()['max_credits']
             current_assigned_credits = sum(class_credits[cid] for cid, _ in lec_assign_map[lec_id])
             while cur_load + current_assigned_credits > max_credits and lst:
                 drop_class_id, drop_score = lst.pop(0)
-                # remove from assignments
+                # Xóa khỏi danh sách phân công
                 try:
                     assignments.remove((drop_class_id, lec_id))
                 except ValueError:
