@@ -1,41 +1,11 @@
 import networkx as nx
 from collections import defaultdict
-from validation import (
-    check_lecturer_skill,
-    check_time_conflict,
-    check_lecturer_max_credits
-)
 from database import (
     get_connection, get_all_classes, get_subject_credits, 
     get_lecturer_by_subject, get_lecturer_schedule, get_lecturer_current_load,
     assign_lecturer, clear_schedule
 )
 
-def can_assign(class_info, lecturer, conn):
-    # Check kỹ năng
-    if not check_lecturer_skill(lecturer["lecturer_id"], class_info["subject_code"], conn):
-        return False
-
-    # Check trùng lịch
-    if check_time_conflict(
-        lecturer["lecturer_id"],
-        class_info["day"],
-        class_info["start_period"],
-        class_info["end_period"],
-        conn
-    ):
-        return False
-
-    # Check quá tải tín chỉ
-    if not check_lecturer_max_credits(
-        lecturer["lecturer_id"],
-        class_info["credits"],
-        lecturer["max_credits"],
-        conn
-    ):
-        return False
-
-    return True
 
 def parse_weeks(weeks_str):
     """
