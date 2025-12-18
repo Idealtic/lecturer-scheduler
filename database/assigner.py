@@ -235,7 +235,7 @@ def solve_and_record(conn, commit_result=True):
             max_credits = conn.execute("SELECT max_credits FROM lecturer WHERE lecturer_id = ?", (lec_id,)).fetchone()['max_credits']
             current_assigned_credits = sum(class_credits[cid] for cid, _ in lec_assign_map[lec_id])
             while cur_load + current_assigned_credits > max_credits and lst:
-                drop_class_id, drop_score = lst.pop(0)
+                drop_class_id, _ = lst.pop(0)
                 # Xóa khỏi danh sách phân công
                 try:
                     assignments.remove((drop_class_id, lec_id))
