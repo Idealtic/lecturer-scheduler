@@ -55,12 +55,9 @@ def compute_score_for_assignment(conn, cls, lecturer):
     """
     Tính điểm phù hợp (score) cho việc gán lecturer cho class cls.
     Đơn giản hóa:
-    - base_score = 100 nếu lecturer có kỹ năng dạy môn (từ lecturer_skill),
-      else -1000 (không thêm cạnh nếu không có skill)
     - Deduct penalty theo tải hiện tại (current credits / max_credits)
     - Deduct penalty nếu có ít tương thích (không dùng ở đây)
     """
-    subject_code = cls['subject_code']
     # lấy danh sách giảng viên theo subject (hàm get_lecturer_by_subject)
     # nhưng hàm ngoài trả list of dict giảng viên, chúng ta so sánh id
     # kiểm tra nếu lecturer được trả (đã được filtered), nếu không thì return None
