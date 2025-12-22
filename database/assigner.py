@@ -6,7 +6,6 @@ from database import (
     assign_lecturer, clear_schedule
 )
 
-
 def parse_weeks(weeks_str):
     """
     Nhận chuỗi weeks như "2-19" hoặc "1,3,5" hoặc "2-5,7,9-11"
@@ -56,13 +55,8 @@ def compute_score_for_assignment(conn, cls, lecturer):
     Tính điểm phù hợp (score) cho việc gán lecturer cho class cls.
     Đơn giản hóa:
     - Deduct penalty theo tải hiện tại (current credits / max_credits)
-    - Deduct penalty nếu có ít tương thích (không dùng ở đây)
     """
-    # lấy danh sách giảng viên theo subject (hàm get_lecturer_by_subject)
-    # nhưng hàm ngoài trả list of dict giảng viên, chúng ta so sánh id
-    # kiểm tra nếu lecturer được trả (đã được filtered), nếu không thì return None
     base = 100
-    # lấy current load và max credits
     cur_load = get_lecturer_current_load(conn, lecturer["lecturer_id"])
     max_credits = lecturer["max_credits"]
     if max_credits <= 0:
@@ -71,7 +65,6 @@ def compute_score_for_assignment(conn, cls, lecturer):
     score = base - int(load_ratio * 50)
     return score
 
-# ---------- Build graph and run min-cost flow ----------
 def build_flow_graph(conn):
     """
     DiGraph
@@ -82,7 +75,6 @@ def build_flow_graph(conn):
     Note: remaining_slots được tính bằng floor((max_credits - current_load) / min_class_credit)
     """
     classes = get_all_classes(conn) 
-    # tính tín chỉ nhỏ nhất của các lớp để xác định kích thước slot
     class_credits = {}
     min_credit = None
     for cls in classes:
@@ -96,19 +88,18 @@ def build_flow_graph(conn):
     G = nx.DiGraph()
     SRC = "SRC"
     SNK = "SNK"
-    G.add_node(SRC); G.add_node(SNK)
+    G.add_node(SRC)
+    G.add_node(SNK)
 
     # tính trước danh sách giảng viên có thể dạy mỗi lớp và cả lịch hiện tại để kiểm tra xung đột.
     # Map lec_id -> current schedule classes (list of dict)
     # map lecturer id -> dict (lecturer info: max_credits)
     # Chỉ lấy danh sách giảng viên cho từng môn dựa trên những giảng viên đủ điều kiện
     lecturers_info = {}  # id -> dict (lecturer row)
-    # Lấy tất cả giảng viên cho capacity edges sau 
     cur = conn.execute("SELECT * FROM lecturer")
     for r in cur.fetchall():
         lecturers_info[r['lecturer_id']] = dict(r)
 
-    # tính số tín chỉ còn lại của mỗi giảng viên
     remaining_credits = {}
     for lec_id, info in lecturers_info.items():
         cur_load = get_lecturer_current_load(conn, lec_id)
@@ -156,7 +147,7 @@ def build_flow_graph(conn):
     # Thêm cạnh từ giảng viên đến SINK
     # capacity biểu diễn số lượng lớp tối đa có thể nhận
     for lec_id, remaining in remaining_credits.items():
-        slot_capacity = remaining // min_credit  # số lượng tín chỉ tối thiểu có thể nhận
+        slot_capacity = remaining // min_credit  # số lượng lớp tối đa có thể nhận
         if slot_capacity <= 0:
             continue
         lec_node = f"lec_{lec_id}"
@@ -175,7 +166,8 @@ def solve_and_record(conn, commit_result=True):
     - Ghi kết quả phân công vào cơ sở dữ liệu
     """
     G, classes, class_credits = build_flow_graph(conn)
-    SRC = "SRC"; SNK = "SNK"
+    SRC = "SRC"
+    SNK = "SNK"
 
     # run min cost max flow
     flow_dict = nx.max_flow_min_cost(G, SRC, SNK)
@@ -250,7 +242,8 @@ def solve_and_record(conn, commit_result=True):
                 cls = class_map[cid]
                 # “Tìm giảng viên thay thế tốt nhất trong số những người có thể dạy, không bị tràn lịch và không có xung đột.”
                 possible = get_lecturer_by_subject(conn, cls['subject_code'])
-                best = None; best_score = -10**9
+                best = None
+                best_score = -10**9
                 for lec in possible:
                     lec_id = lec['lecturer_id']
                     # Tính sức chứa còn lại theo tín chỉ ngay bây giờ
@@ -263,7 +256,8 @@ def solve_and_record(conn, commit_result=True):
                     conflict = False
                     for ex in get_lecturer_schedule(conn, lec_id):
                         if time_conflict(cls, ex):
-                            conflict = True; break
+                            conflict = True
+                            break
                     if conflict:
                         continue
                     # Kiểm tra xung đột với các lớp đã được phân công cho giảng viên này trong lần chạy này.
@@ -271,7 +265,8 @@ def solve_and_record(conn, commit_result=True):
                         if al == lec_id:
                             other_cls = class_map[ac]
                             if time_conflict(cls, other_cls):
-                                conflict = True; break
+                                conflict = True
+                                break
                     if conflict:
                         continue
                     # compute score
