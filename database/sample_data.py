@@ -148,14 +148,12 @@ def insert_lecturer_skills(conn): #thêm dữ liệu vào bảng lecturer_skill
     return skills
 
 def insert_classes(subjects, conn, rooms): #thêm dữ liệu vào bảng classes
-    ssh_subs = [s for s in subjects if s[0].startswith("SSH")]
-    mi_subs  = [s for s in subjects if s[0].startswith("MI")]
-    em_subs  = [s for s in subjects if s[0].startswith("EM")]
-
-    sorted_subjects = ssh_subs + mi_subs + em_subs
     classes = []
     current_class_id = 163001
-    room_codes = [r[0] for r in rooms]
+    
+    occupied_slots = set()
+
+    sorted_subjects = sorted(subjects, key=lambda x: (x[3], x[2]), reverse=True)
 
     for sub in sorted_subjects:
         sub_code = sub[0]
@@ -172,42 +170,70 @@ def insert_classes(subjects, conn, rooms): #thêm dữ liệu vào bảng classe
         for _ in range(num_classes):
             variance = int(base_student_count * 0.15)
             student_count = random.randint(base_student_count - variance, base_student_count + variance)
-            if student_count > 200:
+            if student_count > 200: 
                 student_count = 200
             
-            room = random.choice(room_codes)
-            weeks = "2-19"
+            suitable_rooms = [r[0] for r in rooms if r[1] >= student_count]
+            
+            if not suitable_rooms:
+                max_room = max(rooms, key = lambda x: x[1])
+                suitable_rooms = [max_room[0]]
 
-            if credits == 2:
-                day = random.randint(2, 7)
-                start_period = random.choice([1, 4, 7, 10])
-                end_period = start_period + 2
-
-                classes.append((current_class_id, sub_code, room, day, start_period, end_period, weeks, student_count))
-                current_class_id +=1
-
-            elif credits == 3:
-                day = random.randint(2, 7)
-                start_period = random.choice([1, 6])
-                end_period = start_period + 3
-
-                classes.append((current_class_id, sub_code, room, day, start_period, end_period, weeks, student_count))
-                current_class_id += 1
-
-            elif credits == 4:
-                day_1 = random.randint(2, 5)
-                day_2 = day_1 + 2
-
-                start_1 = random.choice([1, 4, 7, 10])
-                end_1 = start_1 + 2
-
-                start_2 = random.choice([1, 3, 5, 7, 9, 11])
-                end_2 = start_2 + 1
+            assigned = False
+            for _ in range(50):
+                room = random.choice(suitable_rooms)
+                weeks = "2-19"
                 
-                classes.append((current_class_id, sub_code, room, day_1, start_1, end_1, weeks, student_count))
-                current_class_id += 1
-                classes.append((current_class_id, sub_code, room, day_2, start_2, end_2, weeks, student_count))
-                current_class_id += 1
+                proposal = []
+                
+                if credits == 2:
+                    day = random.randint(2, 7)
+                    start_period = random.choice([1, 4, 7, 10])
+                    proposal.append((day, start_period, start_period + 2))
+                
+                elif credits == 3:
+                    day = random.randint(2, 7)
+                    start_period = random.choice([1, 6]) 
+                    proposal.append((day, start_period, start_period + 3))
+                
+                elif credits == 4:
+                    day_1 = random.randint(2, 5)
+                    day_2 = day_1 + 2
+                    start_1 = random.choice([1, 4, 7, 10])
+                    start_2 = random.choice([1, 3, 5, 7, 9, 11])
+                    proposal.append((day_1, start_1, start_1 + 2))
+                    proposal.append((day_2, start_2, start_2 + 1))
+
+                is_conflict = False
+                temp_slots = []
+
+                for (day, start_period, end_period) in proposal:
+                    for p in range(start_period, end_period):
+                        if (room, day, p) in occupied_slots:
+                            is_conflict = True
+                            break
+                        temp_slots.append((room, day, p))
+                    if is_conflict: 
+                        break
+                
+                if not is_conflict:
+                    for slot in temp_slots:
+                        occupied_slots.add(slot)
+                    
+                    if len(proposal) == 1:
+                        classes.append((current_class_id, sub_code, room, proposal[0][0], proposal[0][1], proposal[0][2], weeks, student_count))
+                        current_class_id += 1
+                    else:
+                        classes.append((current_class_id, sub_code, room, proposal[0][0], proposal[0][1], proposal[0][2], weeks, student_count))
+                        current_class_id += 1
+                        classes.append((current_class_id, sub_code, room, proposal[1][0], proposal[1][1], proposal[1][2], weeks, student_count))
+                        current_class_id += 1
+                    
+                    assigned = True
+                    break
+
+            if not assigned:
+                pass
 
     if classes:
         conn.executemany("INSERT OR IGNORE INTO classes VALUES (?,?,?,?,?,?,?,?)", classes)
