@@ -97,7 +97,7 @@ def add_class_to_lecturer_edges(G, conn, classes, class_credits, remaining_credi
 
 def add_lecturer_to_sink_edges(G, remaining_credits, min_credit,SNK): #Tạo cạnh nối giảng viên -> SINK
     for lec_id, remaining in remaining_credits.items():
-        slot_capacity = remaining // min_credit  # số lượng lớp tối đa có thể nhận
+        slot_capacity = int(remaining / min_credit)  # số lượng lớp tối đa có thể nhận
         if slot_capacity <= 0:
             continue
         lec_node = f"lec_{lec_id}"
@@ -107,11 +107,21 @@ def prepare_graph_data(conn):
     classes = get_all_classes(conn) 
     class_credits = {}
     min_credit = None
+    subject_class_count = defaultdict(int)
+
     for cls in classes:
-        c = get_subject_credits(conn, cls['subject_code'])
-        class_credits[cls['class_id']] = c
-        if min_credit is None or c < min_credit:
-            min_credit = c
+        subject_class_count[cls['subject_code']] += 1
+        total_credits = get_subject_credits(conn, cls['subject_code'])
+        num_sessions = subject_class_count[cls['subject_code']]
+
+        if num_sessions > 0:
+            class_credits[cls['class_id']] = total_credits / num_sessions
+        else:
+            class_credits[cls['class_id']] = total_credits
+
+        class_value = class_credits[cls['class_id']]
+        if min_credit is None or class_value < min_credit:
+            min_credit = class_value
     if min_credit is None or min_credit <= 0:
         min_credit = 1
 
@@ -270,6 +280,7 @@ def solve_and_record(conn, commit_result=True):
     if over_assigned:
         removed = remove_overloaded_assignment(over_assigned, classes, assignments, conn, class_credits)
         greedy_reassign(removed, class_map, conn, class_credits, assignments)
+        resolve_time_conflicts(assignments, class_map, conn, class_credits)
 
     if commit_result:
         clear_schedule(conn)
@@ -277,3 +288,49 @@ def solve_and_record(conn, commit_result=True):
             assign_lecturer(conn, class_id, lec_id)
 
     return assignments
+
+def find_time_conflicts(assignments, class_map):
+    conflicts = []
+    lec_classes = defaultdict(list)
+
+    for cid, lid in assignments:
+        lec_classes[lid].append(cid)
+
+    for lec_id, cls_ids in lec_classes.items():
+        for i in range(len(cls_ids)):
+            for j in range(i + 1, len(cls_ids)):
+                c1 = class_map[cls_ids[i]]
+                c2 = class_map[cls_ids[j]]
+                if time_conflict(c1, c2):
+                    conflicts.append((lec_id, cls_ids[i], cls_ids[j]))
+
+    return conflicts
+
+def resolve_time_conflicts(assignments, class_map, conn, class_credits):
+    while True:
+        conflicts = find_time_conflicts(assignments, class_map)
+        if not conflicts:
+            break
+
+        lec_id, c1, c2 = conflicts[0]
+
+        cls1 = class_map[c1]
+        cls2 = class_map[c2]
+
+        lec = conn.execute(
+            "SELECT * FROM lecturer WHERE lecturer_id = ?",
+            (lec_id,)
+        ).fetchone()
+        lec = dict(lec)
+
+        s1 = compute_score_for_assignment(conn, lec)
+        s2 = compute_score_for_assignment(conn, lec)
+
+        drop = c1 if class_credits[c1] >= class_credits[c2] else c2
+
+        try:
+            assignments.remove((drop, lec_id))
+        except ValueError:
+            pass
+
+        greedy_reassign([drop], class_map, conn, class_credits, assignments)
