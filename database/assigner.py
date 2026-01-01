@@ -50,19 +50,11 @@ def time_conflict(class_1, class_2):
         return True
     return len(week_1 & week_2) > 0
 
-def compute_score_for_assignment(conn, lecturer):
-    """
-    Tính điểm phù hợp (score) cho việc gán lecturer cho class cls.
-    Đơn giản hóa:
-    - Deduct penalty theo tải hiện tại (current credits / max_credits)
-    """
-    base = 100
-    cur_load = get_lecturer_current_load(conn, lecturer["lecturer_id"])
-    max_credits = lecturer["max_credits"]
-    if max_credits <= 0:
+def compute_score_for_assignment(cur_load, max_credits):
+    if max_credits <= 0: 
         return -1
     load_ratio = cur_load / max_credits
-    score = base - int(load_ratio * 50)
+    score = 100 - int(load_ratio * 50)
     return score
 
 def add_source_to_class_edges(G, SRC, classes):  # Tạo đỉnh cho mỗi lớp học và nối từ SOURCE
@@ -99,7 +91,7 @@ def add_class_to_lecturer_edges(G, conn, classes):  # Tạo cạnh nối lớp -
             if remaining < subject_credits * 0.5:
                 continue
 
-            score = compute_score_for_assignment(conn, lec)
+            score = compute_score_for_assignment(cur_load, max_credits)
             if score < 0:
                 continue
             
@@ -119,40 +111,30 @@ def prepare_graph_data(conn):
     class_credits = {}
     min_credit = None
 
-    subject_class_count = defaultdict(int)
-
-    for cls in classes:
-        subject_class_count[cls['subject_code']] += 1
     for cls in classes:
         total_credits = get_subject_credits(conn, cls['subject_code'])
-        num_sessions = subject_class_count[cls['subject_code']]
-
-        if num_sessions > 0:
-            class_credits[cls['class_id']] = total_credits / num_sessions
+        
+        if total_credits >= 4:
+            val = total_credits / 2
         else:
-            class_credits[cls['class_id']] = total_credits
+            val = total_credits
 
-        class_value = class_credits[cls['class_id']]
-        if min_credit is None or class_value < min_credit:
-            min_credit = class_value
+        class_credits[cls['class_id']] = val
+        
+        if min_credit is None or val < min_credit:
+            min_credit = val
 
     if min_credit is None or min_credit <= 0:
         min_credit = 1
 
-    lecturers_info = {}  # id -> dict (lecturer row)
-    cur = conn.execute("SELECT * FROM lecturer")
-    for r in cur.fetchall():
-        lecturers_info[r['lecturer_id']] = dict(r)
+    lecturer_max_credits = {}
+    cur = conn.execute("SELECT lecturer_id, max_credits FROM lecturer")
+    for r in cur:
+        lecturer_max_credits[r['lecturer_id']] = r['max_credits']
 
-    remaining_credits = {}
-    for lec_id, info in lecturers_info.items():
-        cur_load = get_lecturer_current_load(conn, lec_id)
-        remaining = info['max_credits'] - cur_load
-        if remaining < 0:
-            remaining = 0
-        remaining_credits[lec_id] = remaining
+    remaining_credits = lecturer_max_credits.copy()
 
-    return classes, class_credits, remaining_credits, min_credit
+    return classes, class_credits, remaining_credits, min_credit, lecturer_max_credits
 
 def build_flow_graph(conn):
     """
@@ -169,12 +151,12 @@ def build_flow_graph(conn):
     G.add_node(SRC)
     G.add_node(SNK)
 
-    classes, class_credits, remaining_credits, min_credit = prepare_graph_data(conn)
+    classes, class_credits, remaining_credits, min_credit, lecturer_max_credits = prepare_graph_data(conn)
     add_source_to_class_edges(G, SRC, classes)
     add_class_to_lecturer_edges(G, conn, classes)
     add_lecturer_to_sink_edges(G, remaining_credits, min_credit,SNK)
 
-    return G, classes, class_credits
+    return G, classes, class_credits, lecturer_max_credits 
 
 def assignment_result(G, flow_dict): # Nếu luồng = 1 -> Lớp được gán cho giảng viên
     assignments = []
@@ -210,7 +192,7 @@ def remove_overloaded_assignment(over_assigned, classes, assignments, conn, clas
     for cls in classes:
         cls_id = cls['class_id']
         for lec in get_lecturer_by_subject(conn, cls['subject_code']):
-            score_map[(cls_id, lec['lecturer_id'])] = compute_score_for_assignment(conn, lec)
+            score_map[(cls_id, lec['lecturer_id'])] = compute_score_for_assignment(cur_load, max_credits)
 
     lec_assign_map = defaultdict(list)
     for class_id, lec_id in assignments:
@@ -234,44 +216,53 @@ def remove_overloaded_assignment(over_assigned, classes, assignments, conn, clas
 
     return removed
 
-def greedy_reassign(removed, class_map, conn, class_credits, assignments):
-    if removed:
-        for cid in removed:
-            cls = class_map[cid]
-            possible = get_lecturer_by_subject(conn, cls['subject_code'])
-            best = None
-            best_score = -10**9
-            for lec in possible:
-                lec_id = lec['lecturer_id']
-                cur_load = get_lecturer_current_load(conn, lec_id)
-                assigned_credits = sum(class_credits[c] for c,l in assignments if l==lec_id)
-                max_credits = conn.execute("SELECT max_credits FROM lecturer WHERE lecturer_id = ?", (lec_id,)).fetchone()['max_credits']
-                if cur_load + assigned_credits + class_credits[cid] > max_credits:
-                    continue
-                conflict = False
-                for ex in get_lecturer_schedule(conn, lec_id):
-                    if time_conflict(cls, ex):
+def greedy_reassign(removed_class_ids, class_map, conn, class_credits, assignments, current_load_map, lecturer_max_credits, lec_schedule_map, black_list = None):
+    if black_list is None:
+        black_list = {}
+
+    for cid in removed_class_ids:
+        cls = class_map[cid]
+        sub_code = cls['subject_code']
+        possible_lecs = get_lecturer_by_subject(conn, sub_code)
+
+        best_lec_id = None
+        best_score = -10**9
+
+        for lec in possible_lecs:
+            lec_id = lec['lecturer_id']
+
+            if cid in black_list and lec_id in black_list[cid]:
+                continue
+
+            max_credits = lecturer_max_credits.get(lec_id, 0)
+            cur_load = current_load_map.get(lec_id, 0)
+            cred = class_credits.get(cid, 2)
+
+            if cur_load + cred > max_credits:
+                continue
+            
+            conflict = False
+            if lec_id in lec_schedule_map:
+                for assigned_cls in lec_schedule_map[lec_id]:
+                    if time_conflict(cls, assigned_cls):
                         conflict = True
                         break
-                if conflict:
-                    continue
-                for (ac, al) in assignments:
-                    if al == lec_id:
-                        other_cls = class_map[ac]
-                        if time_conflict(cls, other_cls):
-                            conflict = True
-                            break
-                if conflict:
-                    continue
-                score = compute_score_for_assignment(conn, lec)
-                if score > best_score:
-                    best = lec_id; best_score = score
-            if best is not None:
-                assignments.append((cid, best))
-            else:
-                pass
+            if conflict: 
+                continue
 
-def resolve_split_subjects(assignments, class_map, conn, class_credits):
+            score = compute_score_for_assignment(cur_load, max_credits)
+            if score > best_score:
+                best_lec_id = lec_id
+                best_score = score
+
+        if best_lec_id is not None:
+            assignments.append((cid, best_lec_id))
+            current_load_map[best_lec_id] += class_credits.get(cid, 2)
+            lec_schedule_map[best_lec_id].append(cls)
+        else:
+            pass
+
+def resolve_split_subjects(assignments, class_map, class_credits, current_load_map, lecturer_max_credits, lec_schedule_map):
     """
     Đảm bảo các lớp (buổi) cùng subject_code được gán cho cùng 1 giảng viên
     """
@@ -283,93 +274,53 @@ def resolve_split_subjects(assignments, class_map, conn, class_credits):
         subject_assignments[subject].append((cid, lid))
 
     for subject, lst in subject_assignments.items():
-        # Nếu chỉ có 1 giảng viên thì OK
+        if len(lst) < 2:
+            continue
+        
         lecturers = [lid for _, lid in lst]
         if len(set(lecturers)) <= 1:
             continue
 
-        # Chọn giảng viên chiếm đa số
         lec_count = defaultdict(int)
-        for _, lid in lst:
+        for lid in lecturers:
             lec_count[lid] += 1
+        target_lec = max(lec_count, key=lec_count.get)
 
-        chosen_lecturer = max(lec_count.items(), key=lambda x: x[1])[0]
-
-        # Ép các lớp còn lại theo giảng viên đã chọn
-        for cid, lid in lst:
-            if lid == chosen_lecturer:
-                continue
-
-            # gỡ gán cũ
-            try:
-                assignments.remove((cid, lid))
-            except ValueError:
-                pass
+        for cid, current_lid in lst:
+            if current_lid == target_lec: continue
 
             cls = class_map[cid]
-            credit = class_credits[cid]
+            cred = class_credits.get(cid, 2)
 
-            cur_load = get_lecturer_current_load(conn, chosen_lecturer)
-            assigned = sum(
-                class_credits[c]
-                for c, l in assignments
-                if l == chosen_lecturer
-            )
+            target_load = current_load_map.get(target_lec, 0)
+            target_max = lecturer_max_credits.get(target_lec, 0)
 
-            max_credits = conn.execute(
-                "SELECT max_credits FROM lecturer WHERE lecturer_id = ?",
-                (chosen_lecturer,)
-            ).fetchone()['max_credits']
-
-            # kiểm tra tín chỉ
-            if cur_load + assigned + credit > max_credits:
+            if target_load + cred > target_max:
                 continue
-
-            # kiểm tra trùng lịch
             conflict = False
-            for c, l in assignments:
-                if l == chosen_lecturer:
-                    if time_conflict(cls, class_map[c]):
+            if target_lec in lec_schedule_map:
+                for assigned_cls in lec_schedule_map[target_lec]:
+                    if time_conflict(cls, assigned_cls):
                         conflict = True
                         break
+            if conflict: 
+                continue # Target bị trùng lịch
 
-            if conflict:
-                continue
-
-            assignments.append((cid, chosen_lecturer))
-
-def solve_and_record(conn, commit_result=True):
-    """
-    Giải bài toán phân công bằng Min-Cost Max-Flow.
-
-    Kết quả trả về:
-    - Danh sách (class_id, lecturer_id)
-
-    Nếu commit_result = True:
-    - Ghi kết quả phân công vào cơ sở dữ liệu
-    """
-    G, classes, class_credits = build_flow_graph(conn)
-    SRC = "SRC"
-    SNK = "SNK"
-
-    flow_dict = nx.max_flow_min_cost(G, SRC, SNK) 
-
-    assignments = assignment_result(G, flow_dict)
-    class_map = {cls['class_id']: cls for cls in classes}
-    over_assigned = check_over_assigned(assignments, class_credits, conn)
-
-    if over_assigned:
-        removed = remove_overloaded_assignment(over_assigned, classes, assignments, conn, class_credits)
-        greedy_reassign(removed, class_map, conn, class_credits, assignments)
-        resolve_time_conflicts(assignments, class_map, conn, class_credits)
-    resolve_split_subjects(assignments, class_map, conn, class_credits)
-
-    if commit_result:
-        clear_schedule(conn)
-        for class_id, lec_id in assignments:
-            assign_lecturer(conn, class_id, lec_id)
-
-    return assignments
+            # --- CHUYỂN GIAO (UPDATE STATE) ---
+            try:
+                # 1. Gỡ khỏi người cũ
+                assignments.remove((cid, current_lid))
+                current_load_map[current_lid] -= cred
+                if cls in lec_schedule_map[current_lid]:
+                    lec_schedule_map[current_lid].remove(cls)
+                
+                # 2. Gán cho người mới
+                assignments.append((cid, target_lec))
+                current_load_map[target_lec] += cred
+                lec_schedule_map[target_lec].append(cls)
+                
+            except ValueError:
+                pass
 
 def find_time_conflicts(assignments, class_map):
     conflicts = []
@@ -388,16 +339,15 @@ def find_time_conflicts(assignments, class_map):
 
     return conflicts
 
-def resolve_time_conflicts(assignments, class_map, conn, class_credits):
-    while True:
+def resolve_time_conflicts(assignments, class_map, conn, class_credits, current_load_map, lecturer_max_credits, lec_schedule_map):
+    loop_count = 0
+
+    while loop_count < 100:
         conflicts = find_time_conflicts(assignments, class_map)
         if not conflicts:
             break
 
         lec_id, c1, c2 = conflicts[0]
-
-        cls1 = class_map[c1]
-        cls2 = class_map[c2]
 
         lec = conn.execute(
             "SELECT * FROM lecturer WHERE lecturer_id = ?",
@@ -405,14 +355,81 @@ def resolve_time_conflicts(assignments, class_map, conn, class_credits):
         ).fetchone()
         lec = dict(lec)
 
-        s1 = compute_score_for_assignment(conn, lec)
-        s2 = compute_score_for_assignment(conn, lec)
-
         drop = c1 if class_credits[c1] >= class_credits[c2] else c2
 
         try:
             assignments.remove((drop, lec_id))
+            current_load_map[lec_id] -= class_credits.get(drop, 2)
+            lec_schedule_map[lec_id].remove(class_map[drop])
         except ValueError:
             pass
+        
+        black_list = {drop: [lec_id]}
 
-        greedy_reassign([drop], class_map, conn, class_credits, assignments)
+        greedy_reassign([drop], class_map, conn, class_credits, assignments, current_load_map, lecturer_max_credits, lec_schedule_map, black_list = black_list)
+
+        loop_count += 1
+
+def check_and_remove_conflicts(assignments, class_map, current_load_map, class_credits, lecturer_max_credits):
+    clean_assignments = []
+    removed = []
+    lec_schedule = defaultdict(list)
+
+    for cid, lid in assignments:
+        cls = class_map[cid]
+        cred = class_credits.get(cid, 2)
+        max_c = lecturer_max_credits.get(lid, 0)
+
+        conflict = False
+        for assigned_cls in lec_schedule[lid]:
+            if time_conflict(cls, assigned_cls):
+                conflict = True
+                break
+        
+        if conflict:
+            removed.append(cid)
+            continue 
+
+        if current_load_map[lid] + cred > max_c:
+            removed.append(cid)
+            continue
+
+        lec_schedule[lid].append(cls)
+        current_load_map[lid] += class_credits.get(cid, 2)
+        clean_assignments.append((cid, lid))
+        
+    return clean_assignments, removed, lec_schedule
+
+def solve_and_record(conn, commit_result=True):
+    """
+    Giải bài toán phân công bằng Min-Cost Max-Flow.
+
+    Kết quả trả về:
+    - Danh sách (class_id, lecturer_id)
+
+    Nếu commit_result = True:
+    - Ghi kết quả phân công vào cơ sở dữ liệu
+    """
+    G, classes, class_credits, lecturer_max_credits = build_flow_graph(conn)
+    SRC = "SRC"
+    SNK = "SNK"
+
+    flow_dict = nx.max_flow_min_cost(G, SRC, SNK) 
+
+    raw_assignments = assignment_result(G, flow_dict)
+    class_map = {cls['class_id']: cls for cls in classes}
+    current_load_map = defaultdict(int)
+    assignments, removed, lec_schedule_map = check_and_remove_conflicts(raw_assignments, class_map, current_load_map, class_credits, lecturer_max_credits)
+    assigned_ids = set(cid for cid, lid in assignments)
+
+    all_unassigned = [cls['class_id'] for cls in classes if cls['class_id'] not in assigned_ids]
+    greedy_reassign(all_unassigned, class_map, conn, class_credits, assignments, current_load_map, lecturer_max_credits, lec_schedule_map)
+    resolve_time_conflicts(assignments, class_map, conn, class_credits, current_load_map, lecturer_max_credits, lec_schedule_map)
+    resolve_split_subjects(assignments, class_map, class_credits, current_load_map, lecturer_max_credits, lec_schedule_map)
+
+    if commit_result:
+        clear_schedule(conn)
+        for class_id, lec_id in assignments:
+            assign_lecturer(conn, class_id, lec_id)
+
+    return assignments
