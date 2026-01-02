@@ -79,8 +79,10 @@ def add_class_to_lecturer_edges(G, conn, classes):  # Tạo cạnh nối lớp -
                 if time_conflict(cls, existing_cls):
                     has_conflict = True 
                     break
+            penalty = 0
+
             if has_conflict:
-                continue
+                penalty +=100
 
             cur_load = get_lecturer_current_load(conn, lec_id)
             max_credits = lec['max_credits']
@@ -89,20 +91,22 @@ def add_class_to_lecturer_edges(G, conn, classes):  # Tạo cạnh nối lớp -
             subject_credits = get_subject_credits(conn, subject_code)
 
             if remaining < subject_credits * 0.5:
-                continue
+                penalty +=50
 
             score = compute_score_for_assignment(cur_load, max_credits)
             if score < 0:
-                continue
+                score = 0
             
-            cost = -score
+            cost = -score + penalty
             G.add_edge(cls_node, lec_node, capacity=1, weight=cost)
 
 def add_lecturer_to_sink_edges(G, remaining_credits, min_credit,SNK): #Tạo cạnh nối giảng viên -> SINK
     for lec_id, remaining in remaining_credits.items():
-        slot_capacity = int(remaining / min_credit)  # số lượng lớp tối đa có thể nhận
-        if slot_capacity <= 0:
+        if remaining <= 0:
             continue
+        import math
+        slot_capacity = math.ceil(remaining / min_credit)
+
         lec_node = f"lec_{lec_id}"
         G.add_edge(lec_node, SNK, capacity=slot_capacity, weight=0)
 
@@ -132,7 +136,13 @@ def prepare_graph_data(conn):
     for r in cur:
         lecturer_max_credits[r['lecturer_id']] = r['max_credits']
 
-    remaining_credits = lecturer_max_credits.copy()
+    remaining_credits = {}
+
+    for lec_id, max_c in lecturer_max_credits.items():
+        cur_load = get_lecturer_current_load(conn, lec_id)
+        remaining = max(0, max_c - cur_load)
+        remaining_credits[lec_id] = remaining
+
 
     return classes, class_credits, remaining_credits, min_credit, lecturer_max_credits
 
@@ -235,7 +245,11 @@ def greedy_reassign(removed_class_ids, class_map, conn, class_credits, assignmen
                 continue
 
             max_credits = lecturer_max_credits.get(lec_id, 0)
-            cur_load = current_load_map.get(lec_id, 0)
+
+            if lec_id not in current_load_map:
+                current_load_map[lec_id] = get_lecturer_current_load(conn,lec_id)
+
+            cur_load = current_load_map[lec_id]
             cred = class_credits.get(cid, 2)
 
             if cur_load + cred > max_credits:
@@ -311,8 +325,12 @@ def resolve_split_subjects(assignments, class_map, class_credits, current_load_m
                 # 1. Gỡ khỏi người cũ
                 assignments.remove((cid, current_lid))
                 current_load_map[current_lid] -= cred
-                if cls in lec_schedule_map[current_lid]:
-                    lec_schedule_map[current_lid].remove(cls)
+                
+                if current_lid in lec_schedule_map:
+                    lec_schedule_map[current_lid] = [
+                    c for c in lec_schedule_map[current_lid]
+                    if c['class_id'] != cid 
+                    ]
                 
                 # 2. Gán cho người mới
                 assignments.append((cid, target_lec))
@@ -360,7 +378,8 @@ def resolve_time_conflicts(assignments, class_map, conn, class_credits, current_
         try:
             assignments.remove((drop, lec_id))
             current_load_map[lec_id] -= class_credits.get(drop, 2)
-            lec_schedule_map[lec_id].remove(class_map[drop])
+            if class_map[drop] in lec_schedule_map[lec_id]:
+                lec_schedule_map[lec_id].remove(class_map[drop])
         except ValueError:
             pass
         
@@ -374,6 +393,10 @@ def check_and_remove_conflicts(assignments, class_map, current_load_map, class_c
     clean_assignments = []
     removed = []
     lec_schedule = defaultdict(list)
+
+    temp_load = {}
+    for lid in lecturer_max_credits.keys():
+        temp_load[lid] = current_load_map.get(lid, 0)
 
     for cid, lid in assignments:
         cls = class_map[cid]
@@ -390,12 +413,12 @@ def check_and_remove_conflicts(assignments, class_map, current_load_map, class_c
             removed.append(cid)
             continue 
 
-        if current_load_map[lid] + cred > max_c:
+        if temp_load.get(lid, 0) + cred > max_c:
             removed.append(cid)
             continue
 
         lec_schedule[lid].append(cls)
-        current_load_map[lid] += class_credits.get(cid, 2)
+        temp_load[lid] = temp_load.get(lid, 0) + cred
         clean_assignments.append((cid, lid))
         
     return clean_assignments, removed, lec_schedule
@@ -418,7 +441,11 @@ def solve_and_record(conn, commit_result=True):
 
     raw_assignments = assignment_result(G, flow_dict)
     class_map = {cls['class_id']: cls for cls in classes}
+
     current_load_map = defaultdict(int)
+    for lec_id in lecturer_max_credits.keys():
+        current_load_map[lec_id] = get_lecturer_current_load(conn,lec_id)
+
     assignments, removed, lec_schedule_map = check_and_remove_conflicts(raw_assignments, class_map, current_load_map, class_credits, lecturer_max_credits)
     assigned_ids = set(cid for cid, lid in assignments)
 
@@ -426,6 +453,8 @@ def solve_and_record(conn, commit_result=True):
     greedy_reassign(all_unassigned, class_map, conn, class_credits, assignments, current_load_map, lecturer_max_credits, lec_schedule_map)
     resolve_time_conflicts(assignments, class_map, conn, class_credits, current_load_map, lecturer_max_credits, lec_schedule_map)
     resolve_split_subjects(assignments, class_map, class_credits, current_load_map, lecturer_max_credits, lec_schedule_map)
+
+    over_assigned = check_over_assigned(assignments, class_credits, conn) 
 
     if commit_result:
         clear_schedule(conn)
